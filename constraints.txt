@@ -1,0 +1,8 @@
+numpy==1.24.3
+opencv-python-headless==4.10.0.84
+typing_extensions>=4.4.0
+opencv-python==4.10.0.84
+
+# pip install -c constraints.txt <package>
+
+#pip list | grep -i numpy

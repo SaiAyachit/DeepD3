@@ -25,7 +25,7 @@ setup(
         "scikit-image",
         "imageio",
         "imageio-ffmpeg",
-        "opencv-python",
+        "opencv-python<5",
         "pandas",
         "tqdm",
         "roifile",
