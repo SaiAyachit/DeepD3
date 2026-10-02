@@ -1,12 +1,13 @@
 import numpy as np
-from PyQt5.QtWidgets import QApplication, QMainWindow, QWidget, \
+from PyQt6.QtGui import QAction   
+from PyQt6.QtWidgets import QApplication, QMainWindow, QWidget, \
     QMessageBox, QFileDialog, QGridLayout, QLabel, QPushButton, \
     QProgressBar, QDialog, QTableWidget, QTableWidgetItem, QHeaderView, \
-    QLineEdit, QAction, QGraphicsPathItem, QCheckBox, QFrame, QComboBox, \
+    QLineEdit, QGraphicsPathItem, QCheckBox, QFrame, QComboBox, \
     QSlider, QGraphicsEllipseItem
-from PyQt5.QtGui import QKeySequence, QPainter, QPen, QPainterPath, \
+from PyQt6.QtGui import QKeySequence, QPainter, QPen, QPainterPath, \
     QPolygonF, QIntValidator, QDoubleValidator, QColor
-from PyQt5.QtCore import Qt, QPointF, pyqtSignal
+from PyQt6.QtCore import Qt, QPointF, pyqtSignal
 import pyqtgraph as pg
 import imageio as io
 from deepd3.core.analysis import Stack, ROI2D_Creator, ROI3D_Creator
@@ -25,8 +26,8 @@ from scipy.ndimage import gaussian_filter
 class QHLine(QFrame):
     def __init__(self):
         super().__init__()
-        self.setFrameShape(QFrame.HLine)
-        self.setFrameShadow(QFrame.Sunken)
+        self.setFrameShape(QFrame.Shape.HLine)
+        self.setFrameShadow(QFrame.Shadow.Sunken)
 
 ########################
 ## Ask for dimensions
@@ -63,7 +64,7 @@ class askDimensions(QDialog):
         self.l.addWidget(QLabel("Z step in micrometer"))
         self.l.addWidget(self.z)
 
-        self.exec_()
+        self.exec()
 
     def dimensions(self):
         """Returns dictionary containing xy and z dimensions in µm
@@ -512,7 +513,7 @@ class testROI(QWidget):
         self.l = QGridLayout(self)
 
         self.l.addWidget(QLabel("Gaussian filter"))
-        self.gaussianFilter = DoubleSlider(orientation=Qt.Horizontal)
+        self.gaussianFilter = DoubleSlider(orientation=Qt.Orientation.Horizontal)
         self.gaussianFilter.setMinimum(0)
         self.gaussianFilter.setMaximum(3.0)
         self.gaussianFilter.setSingleStep(0.1)
@@ -534,7 +535,7 @@ class testROI(QWidget):
         self.l.addWidget(QHLine())
 
         self.l.addWidget(QLabel("Area threshold"))
-        self.areaThreshold = DoubleSlider(orientation=Qt.Horizontal)
+        self.areaThreshold = DoubleSlider(orientation=Qt.Orientation.Horizontal)
         self.areaThreshold.setMinimum(0)
         self.areaThreshold.setMaximum(1.0)
         self.areaThreshold.setSingleStep(0.05)
@@ -543,7 +544,7 @@ class testROI(QWidget):
         self.l.addWidget(self.areaThreshold)
 
         self.l.addWidget(QLabel("Peak threshold"))
-        self.peakThreshold = DoubleSlider(orientation=Qt.Horizontal)
+        self.peakThreshold = DoubleSlider(orientation=Qt.Orientation.Horizontal)
         self.peakThreshold.setMinimum(0)
         self.peakThreshold.setMaximum(1.0)
         self.peakThreshold.setSingleStep(0.05)
@@ -552,7 +553,7 @@ class testROI(QWidget):
         self.l.addWidget(self.peakThreshold)
 
         self.l.addWidget(QLabel("Difference to seed intensity [%]"))
-        self.seedDelta = DoubleSlider(orientation=Qt.Horizontal)
+        self.seedDelta = DoubleSlider(orientation=Qt.Orientation.Horizontal)
         self.seedDelta.setMinimum(0)
         self.seedDelta.setMaximum(1.0)
         self.seedDelta.setSingleStep(0.05)
@@ -561,7 +562,7 @@ class testROI(QWidget):
         self.l.addWidget(self.seedDelta)
 
         self.l.addWidget(QLabel("Distance to seed pixel in microns"))
-        self.distanceToSeed = DoubleSlider(orientation=Qt.Horizontal)
+        self.distanceToSeed = DoubleSlider(orientation=Qt.Orientation.Horizontal)
         self.distanceToSeed.setMinimum(0)
         self.distanceToSeed.setMaximum(10)
         self.distanceToSeed.setSingleStep(0.05)
@@ -572,7 +573,7 @@ class testROI(QWidget):
         self.l.addWidget(QHLine())
 
         self.l.addWidget(QLabel("Minimum pixel in ROI"))
-        self.minPx = QSlider(orientation=Qt.Horizontal)
+        self.minPx = QSlider(orientation=Qt.Orientation.Horizontal)
         self.minPx.setMinimum(1)
         self.minPx.setMaximum(500)
         self.minPx.setSingleStep(5)
@@ -581,7 +582,7 @@ class testROI(QWidget):
         self.l.addWidget(self.minPx)
 
         self.l.addWidget(QLabel("Maximum pixel in ROI"))
-        self.maxPx = QSlider(orientation=Qt.Horizontal)
+        self.maxPx = QSlider(orientation=Qt.Orientation.Horizontal)
         self.maxPx.setMinimum(1)
         self.maxPx.setMaximum(10000)
         self.maxPx.setSingleStep(5)
@@ -590,7 +591,7 @@ class testROI(QWidget):
         self.l.addWidget(self.maxPx)
 
         self.l.addWidget(QLabel("Minimum planes in ROI"))
-        self.minPlanes = QSlider(orientation=Qt.Horizontal)
+        self.minPlanes = QSlider(orientation=Qt.Orientation.Horizontal)
         self.minPlanes.setMinimum(1)
         self.minPlanes.setMaximum(10)
         self.minPlanes.setSingleStep(1)
@@ -617,7 +618,7 @@ class testROI(QWidget):
         self.imv.setImage(self.stack.transpose(0,2,1))
 
         self.overlayItem = pg.ImageItem(np.zeros(self.stack.shape[1:]), 
-            compositionMode=QPainter.CompositionMode_Plus)
+            compositionMode=QPainter.CompositionMode.CompositionMode_Plus)
         self.imv.getView().addItem(self.overlayItem)
 
         if type(settings) != type(None):
@@ -692,14 +693,14 @@ class ImageView(pg.ImageView):
         super().__init__(*args, **kwargs)
 
     def mousePressEvent(self, e):
-        if e.button() == Qt.LeftButton:
+        if e.button() == Qt.MouseButton.LeftButton:
             # Get xy coordinate in relation to scene
-            xy = self.getImageItem().mapFromScene(e.pos())
+            xy = self.getImageItem().mapFromScene(QPointF(e.pos()))
             # Emit signal to tell interface where mouse click position is
             self.xy.emit(xy)
 
     def mouseDoubleClickEvent(self, e) -> None:
-        xy = self.getImageItem().mapFromScene(e.pos())
+        xy = self.getImageItem().mapFromScene(QPointF(e.pos()))
 
         self.testROIbuilding.emit(xy)
 
@@ -764,9 +765,10 @@ class Interface(QWidget):
         self.imv.testROIbuilding.connect(self.testROIbuilding)
 
         # Prediction overlay
+        # Prediction overlay
         self.overlay = np.zeros(self.S.stack.shape[1:])
-        self.overlayItem = pg.ImageItem(self.overlay, compositionMode=QPainter.CompositionMode_Plus)
-        self.imv.getView().addItem(self.overlayItem)
+        self.overlayItem = pg.ImageItem(self.overlay, compositionMode=QPainter.CompositionMode.CompositionMode_Plus)
+        self.imv.getView().addItem(self.overlayItem)   
 
         # Update overlay when z location changes
         self.imv.sigTimeChanged.connect(self._changeOverlay)
@@ -783,7 +785,7 @@ class Interface(QWidget):
         self.table.itemSelectionChanged.connect(self.getSelection)
 
         h = self.table.horizontalHeader()
-        h.setSectionResizeMode(QHeaderView.Stretch)
+        h.setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
 
         self.l.addWidget(self.table, 0, 1)
 
@@ -824,9 +826,19 @@ class Interface(QWidget):
 
         # Open window of a subset of microscopy stack
         # z-stack +- 3 planes, w/2 left and right to click, h/2 top and bottom to click
-        self.testROIwindow = testROI(self.S.stack[z-3:z+3, y-h//2:y+h//2, x-w//2:x+w//2],
-            self.S.prediction[z-3:z+3, y-h//2:y+h//2, x-w//2:x+w//2, 0],
-            self.S.prediction[z-3:z+3, y-h//2:y+h//2, x-w//2:x+w//2, 1],
+        # Clamp indices to valid bounds
+        z_s = max(0, z - 3)
+        z_e = min(self.S.stack.shape[0], z + 3)
+        y_s = max(0, y - h // 2)
+        y_e = min(self.S.stack.shape[1], y + h // 2)
+        x_s = max(0, x - w // 2)
+        x_e = min(self.S.stack.shape[2], x + w // 2)
+
+        # Open window of a subset of microscopy stack
+        # z-stack +- 3 planes, w/2 left and right to click, h/2 top and bottom to click
+        self.testROIwindow = testROI(self.S.stack[z_s:z_e, y_s:y_e, x_s:x_e],
+            self.S.prediction[z_s:z_e, y_s:y_e, x_s:x_e, 0],
+            self.S.prediction[z_s:z_e, y_s:y_e, x_s:x_e, 1],
             self.settings)
         self.testROIwindow.settings.connect(self.saveSettingsROI3D)
         self.testROIwindow.show()
@@ -861,8 +873,7 @@ class Interface(QWidget):
                 roiOnImage = QGraphicsPathItem()
                 roiOnImage.setPath(path)
                 # White if not selected, yellow if selected, 1px width, solid line
-                roiOnImage.setPen(QPen(Qt.white if i != self.selectedRow else Qt.yellow, 1, Qt.SolidLine))
-
+                roiOnImage.setPen(QPen(Qt.GlobalColor.white if i != self.selectedRow else Qt.GlobalColor.yellow, 1, Qt.PenStyle.SolidLine))
                 self.roisOnImage.append(roiOnImage)
                 self.imv.getView().addItem(roiOnImage)
 
@@ -1001,7 +1012,7 @@ class Interface(QWidget):
                     size = 2-distance
                     e = QGraphicsEllipseItem(row['X']-size/2, row['Y']-size/2, size, size)
                     e.setBrush(self.annotationColor)
-                    e.setPen(QPen(Qt.NoPen))
+                    e.setPen(QPen(Qt.PenStyle.NoPen))
 
                     self.annotationItems.append(e)
                     self.imv.addItem(e)
@@ -1043,7 +1054,7 @@ class Interface(QWidget):
         QApplication.processEvents()
 
     def keyPressEvent(self, e):
-        if e.key() == Qt.Key_Delete:
+        if e.key() == Qt.Key.Key_Delete:
             q = QMessageBox.question(self, "Delete ROIs", "Do you want to delete the selected ROIs?")
 
             if q == QMessageBox.Yes:
@@ -1084,10 +1095,10 @@ class Main(QMainWindow):
 
         # Main top menu
         self.file = self.menu.addMenu("&File")
-        self.file.addAction("Open", self.open, shortcut=QKeySequence("Ctrl+N"))
-        self.file.addAction("Import annotations", self.importAnnotations, shortcut=QKeySequence("Ctrl+I"))
-        self.file.addAction("Save", self.save, shortcut=QKeySequence("Ctrl+S"))
-        self.file.addAction("Close", self.close)
+        self.file.addAction("Open", QKeySequence("Ctrl+N"), self.open)   
+        self.file.addAction("Import annotations", QKeySequence("Ctrl+I"), self.importAnnotations)
+        self.file.addAction("Save", QKeySequence("Ctrl+S"), self.save)
+        self.file.addAction("Close", QKeySequence("Ctrl+Q"), self.close)
 
         self.analyze = self.menu.addMenu("&Analyze")
         self.analyze.setEnabled(False)
@@ -1239,7 +1250,7 @@ class Main(QMainWindow):
         """Segment stack using user-defined settings
         """
         s = Segment(self.model_fn)
-        s.exec_()
+        s.exec()
 
         if s.go:
             # Only load tensorflow if needed.
@@ -1288,7 +1299,7 @@ class Main(QMainWindow):
         """
         self.c = Cleaning()
         self.c.previewSignal.connect(self.previewCleaning)
-        self.c.exec_()
+        self.c.exec()
 
         if self.c.go:
             print("Actually cleaning...")
@@ -1353,7 +1364,7 @@ class Main(QMainWindow):
             return 
 
         roi = ROI2D()
-        roi.exec_()
+        roi.exec()
 
         if roi.go:
             self.w.log("Building 2D ROIs...")
@@ -1392,7 +1403,7 @@ class Main(QMainWindow):
             return 
 
         roi = ROI3D(self.w.settings)
-        roi.exec_()
+        roi.exec()
 
         if roi.go:
             self.w.log("Building 3D ROIs...")
@@ -1523,7 +1534,7 @@ def main():
     m = Main()
     m.show()
 
-    sys.exit(app.exec_())
+    sys.exit(app.exec())
     
 
 if __name__ == '__main__':

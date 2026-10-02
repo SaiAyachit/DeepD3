@@ -1,8 +1,8 @@
-from PyQt5.QtWidgets import QApplication, QLabel, QGridLayout, \
+from PyQt6.QtWidgets import QApplication, QLabel, QGridLayout, \
     QSizePolicy, QWidget, QPushButton, QFileDialog, QLineEdit, QDialog, \
     QProgressBar, QMessageBox, QCheckBox, QListWidget, QTreeWidgetItem, QTreeWidget
-from PyQt5.QtGui import QPainter, QKeyEvent, QDoubleValidator, QIntValidator
-from PyQt5.QtCore import Qt, pyqtSignal
+from PyQt6.QtGui import QPainter, QKeyEvent, QDoubleValidator, QIntValidator
+from PyQt6.QtCore import Qt, pyqtSignal
 import pyqtgraph as pg
 import imageio as io
 import numpy as np
@@ -256,7 +256,7 @@ class askSpacing(QDialog):
         self.l.addWidget(QLabel("Z spacing"))
         self.l.addWidget(self.z)
 
-        self.exec_()
+        self.exec()
 
     def spacing(self):
         """ Converts spacing
@@ -705,7 +705,7 @@ def main():
     s = Selector()
     s.show()
 
-    app.exec_()
+    app.exec()
 
 if __name__ == '__main__':
     main()

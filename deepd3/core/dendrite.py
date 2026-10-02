@@ -5,7 +5,7 @@ from tqdm import tqdm
 import pathlib
 import numpy as np
 from skimage.draw import disk
-from PyQt5.QtCore import QObject, pyqtSignal
+from PyQt6.QtCore import QObject, pyqtSignal
 
             
 def line_w_sphere(s, p0, p1, r0, r1, color=1, spacing=[1, 1, 1]):

@@ -1,6 +1,6 @@
 import numpy as np
 from roifile import ImagejRoi, roiwrite
-from PyQt5.QtCore import QObject, pyqtSignal
+from PyQt6.QtCore import QObject, pyqtSignal
 import pandas as pd 
 import imageio as io
 import os
