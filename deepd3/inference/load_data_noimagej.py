@@ -5,7 +5,7 @@ import numpy as np
 from pathlib import Path
 import argparse
 import time
-
+from datetime import datetime
 
 def read_image_stack(filename: str, n_channels: int = 3) -> np.ndarray:
     """
@@ -77,9 +77,7 @@ def process_folder(input_dir: str, output_dir: str,
     out_path.mkdir(parents=True, exist_ok=True)
     
 
-    # Add timestamp so re-runs don't collide
-    from datetime import datetime
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    
     files = sorted(in_path.glob(pattern))
 
     # Exclude already-processed files
@@ -112,7 +110,8 @@ def process_folder(input_dir: str, output_dir: str,
                 green = (green - gmin) / (gmax - gmin)
             green = green.astype(np.float32)
             
-            out_file = out_path / (f.stem + "_green.tif")
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M")
+            out_file = out_path / (f.stem + f"_green_{timestamp}.tif")   
             save_for_deepd3(green, out_file)
             
             elapsed = time.time() - t0
