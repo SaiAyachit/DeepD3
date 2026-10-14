@@ -1,29 +1,33 @@
-# Usage: python test_deepd3_models.py
+# Usage: python deepd3/inference/test_deepd3_models.py
 """
 Testing framework for DeepD3 pre-trained models (no ground truth).
-Run: python test_deepd3_models.py
+Run: python deepd3/inference/test_deepd3_models.py
 """
+from importlib.resources import path
 import numpy as np
 import tensorflow as tf
 from pathlib import Path
 from scipy import ndimage
 import warnings
+import tifffile
 warnings.filterwarnings("ignore")
 
 # ─── Configuration ────────────────────────────────────────────────────────────
 
 MODEL_DIR = Path("./deepd3/inference/pretrained_models")  # put your .h5 files here
 MODELS = {
-    "8F":     MODEL_DIR / "DeepD3_8F.h5",
+    #"8F":     MODEL_DIR / "DeepD3_8F.h5",
     "16F":    MODEL_DIR / "DeepD3_16F.h5",
     "32F":    MODEL_DIR / "DeepD3_32F.h5"
 }
 
+FRAME_COUNTS = {"8F": 8, "16F": 16, "32F": 32,
+                "8F_94": 8, "16F_94": 16, "32F_94": 32}   
 # Test data
-processed_dir = Path("./data/processed")
-test_files = sorted(processed_dir.glob("*_green.tif"))
+processed_dir = Path("deepd3/inference/data/processed")   
+test_files = sorted(processed_dir.glob("*_green_*.tif"))
 if not test_files:
-    raise FileNotFoundError(f"No *_green.tif files found in {processed_dir}")
+    raise FileNotFoundError(f"No *_green_*.tif files found in {processed_dir}")
 TEST_DATA_PATH = str(test_files[0])
 SWEEP_FILES = test_files[:3]
 
@@ -64,62 +68,100 @@ def prepare_input(volume: np.ndarray) -> np.ndarray:
 
 
 def tile_inference(model: tf.keras.Model, volume: np.ndarray,
-                   tile_size: int = TILE_SIZE, overlap: int = OVERLAP) -> tuple:
+                   n_frames: int = 8,
+                   tile_size: int = 512, overlap: int = 128) -> tuple:
     """
-    Sliding-window inference over XY, full Z.
-    Returns (spine_probs, dendrite_probs) as (Z, Y, X) arrays.
+    2D CNN inference over 3D volume.
+    Feeds n_frames consecutive Z-slices as the "batch" dim.
+    Uses the center frame's prediction for each Z-position.
+    
+    Parameters
+    ----------
+    volume : (Z, Y, X) float32 in [0, 1]
+    n_frames : number of Z-frames the model expects (8, 16, or 32)
+    tile_size : XY tile size (multiple of 32)
+    overlap : XY overlap between tiles
     """
     Z, Y, X = volume.shape
-    vol_4d = prepare_input(volume)  # (1, Z, Y, X, 1)
+    
+    # Rescale to [-1, 1]
+    vol = volume.astype(np.float32)
+    vmin, vmax = vol.min(), vol.max()
+    if vmax > vmin:
+        vol = 2.0 * (vol - vmin) / (vmax - vmin) - 1.0
+    
+    center = n_frames // 2  # which frame's prediction to keep
     
     # Output accumulators
     spine_out = np.zeros((Z, Y, X), dtype=np.float32)
     dend_out = np.zeros((Z, Y, X), dtype=np.float32)
-    weight = np.zeros((Z, Y, X), dtype=np.float32)  # for averaging overlaps
+    weight = np.zeros((Z, Y, X), dtype=np.float32)
     
     step = tile_size - overlap
     
-    for y0 in range(0, max(1, Y - overlap), step):
-        for x0 in range(0, max(1, X - overlap), step):
-            y1 = min(y0 + tile_size, Y)
-            x1 = min(x0 + tile_size, X)
-            
-            # Pad tile if it's smaller than tile_size (edge case)
-            tile = vol_4d[:, :, y0:y1, x0:x1, :]
-            pad_y = tile_size - (y1 - y0)
-            pad_x = tile_size - (x1 - x0)
-            if pad_y > 0 or pad_x > 0:
-                tile = np.pad(tile, 
-                              ((0,0),(0,0),(0,pad_y),(0,pad_x),(0,0)),
-                              mode='edge')
-            
-            # Run inference
-            pred = model.predict(tile, verbose=0)
-            
-            # DeepD3 dual-decoder: outputs [spine, dendrite] or two separate outputs
-            # Adjust based on your model's output structure
-            if isinstance(pred, (list, tuple)):
-                spine_tile, dend_tile = pred[0], pred[1]
-            else:
-                # Single output with 2 channels: (1, Z, Y, X, 2)
-                spine_tile = pred[:, :, :, :, 0]
-                dend_tile = pred[:, :, :, :, 1]
-            
-            # Remove padding
-            spine_tile = spine_tile[:, :, :y1-y0, :x1-x0]
-            dend_tile = dend_tile[:, :, :y1-y0, :x1-x0]
-            
-            # Accumulate with weighting (center of tile weighted more)
-            spine_out[:, y0:y1, x0:x1] += spine_tile
-            dend_out[:, y0:y1, x0:x1] += dend_tile
-            weight[:, y0:y1, x0:x1] += 1
+    # Loop over Z in windows of n_frames
+    for z_start in range(0, Z, 1):
+        z_end = z_start + n_frames
+        if z_end > Z:
+            break  # not enough frames left
+        
+        # Pad Z-window if at the edge (repeat first/last frame)
+        if z_start < center:
+            pad_top = center - z_start
+            z_slice = np.pad(vol[:z_end], ((pad_top, 0), (0,0), (0,0)), mode='edge')
+            z_keep_start = 0
+        else:
+            z_slice = vol[z_start:z_end]
+            z_keep_start = 0
+        
+        # The Z-position this window "belongs to" (center frame)
+        z_pos = z_start + min(center, z_end - z_start - 1)
+        if z_pos >= Z:
+            continue
+        
+        # Loop over XY tiles
+        for y0 in range(0, max(1, Y - overlap), step):
+            for x0 in range(0, max(1, X - overlap), step):
+                y1 = min(y0 + tile_size, Y)
+                x1 = min(x0 + tile_size, X)
+                
+                tile = z_slice[:, y0:y1, x0:x1, np.newaxis]  # (F, Yt, Xt, 1)
+                
+                # Pad XY if needed
+                pad_y = tile_size - (y1 - y0)
+                pad_x = tile_size - (x1 - x0)
+                if pad_y > 0 or pad_x > 0:
+                    tile = np.pad(tile, ((0,0),(0,pad_y),(0,pad_x),(0,0)), mode='edge')
+                
+                # Inference: input (F, tile_size, tile_size, 1)
+                pred = model.predict(tile, verbose=0)
+                
+                # Extract center frame's prediction
+                if isinstance(pred, (list, tuple)):
+                    spine_tile = pred[0][center]
+                    dend_tile = pred[1][center]
+                    # Squeeze trailing channel dim if present: (512,512,1) → (512,512)
+                    if spine_tile.ndim == 3:
+                        spine_tile = spine_tile[:, :, 0]
+                        dend_tile = dend_tile[:, :, 0]
+                else:
+                    spine_tile = pred[center, :, :, 0]
+                    dend_tile = pred[center, :, :, 1]   
+                
+                # Remove XY padding
+                spine_tile = spine_tile[:y1-y0, :x1-x0]
+                dend_tile = dend_tile[:y1-y0, :x1-x0]
+                
+                spine_out[z_pos, y0:y1, x0:x1] += spine_tile
+                dend_out[z_pos, y0:y1, x0:x1] += dend_tile
+                weight[z_pos, y0:y1, x0:x1] += 1
     
-    # Average overlapping regions
-    weight[weight == 0] = 1  # avoid div by zero
+    # Average overlaps
+    weight[weight == 0] = 1
     spine_out /= weight
     dend_out /= weight
     
-    return spine_out, dend_out
+    return spine_out, dend_out   
 
 
 def postprocess(spine_probs: np.ndarray, dend_probs: np.ndarray) -> tuple:
@@ -186,11 +228,11 @@ def test_model_loads(model_name: str, model_path: Path, results: TestResults):
         return None
 
 
-def test_output_shape(model, volume: np.ndarray, results: TestResults, name: str):
+def test_output_shape(model, volume, results, name, n_frames=8):
     """Test 2: Output shape matches input spatial dimensions."""
     Z, Y, X = volume.shape
     try:
-        spine_probs, dend_probs = tile_inference(model, volume)
+        spine_probs, dend_probs = tile_inference(model, volume, n_frames=n_frames)
         
         assert spine_probs.shape == (Z, Y, X), \
             f"Spine shape {spine_probs.shape} != input {(Z,Y,X)}"
@@ -334,22 +376,25 @@ def main():
     results = TestResults()
     all_probs = {}
     
+    # Map model name → n_frames
+    FRAME_COUNTS = {"8F": 8, "16F": 16, "32F": 32}
     for name, path in MODELS.items():
         if not path.exists():
             results.warn(f"{name} exists", f"({path} not found)")
             continue
-        
+
         print(f"\n--- {name} ({path.name}) ---")
-        
+
         # Test 1: Load
         model = test_model_loads(name, path, results)
         if model is None:
             continue
         
-        # Test 2: Output shape
-        spine_probs, dend_probs = test_output_shape(model, volume, results, name)
+        n_frames = FRAME_COUNTS.get(name, 8)
+        # Test 2: Output shape  ← THIS is where tile_inference is called  
+        spine_probs, dend_probs = test_output_shape(model, volume, results, name, n_frames=n_frames)
         if spine_probs is None:
-            continue
+            continue  # skip remaining tests for this model
         
         # Store for cross-model comparison
         all_probs[name] = (spine_probs, dend_probs)
