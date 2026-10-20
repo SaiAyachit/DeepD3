@@ -19,3 +19,4 @@
 *.roi*
 *.DS_Store
 *.egg*
+*.npy

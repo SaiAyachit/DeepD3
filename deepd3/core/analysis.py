@@ -235,15 +235,16 @@ def _distance_to_seed(seed, pos, delta_xy = 1, delta_z = 1):
     """Computes the euclidean distance between seed pixel and current position `pos`
 
     Args:
-        seed (tuple): seed pixel coordinates (x,y,z)
-        pos (tuple): current position coordinates (x,y,z)
+        seed (tuple): seed pixel coordinates (z,y,x), i.e. stack index order
+        pos (tuple): current position coordinates (z,y,x)
 
     Returns:
-        float: euclidean distance between seed and current position 
+        float: euclidean distance between seed and current position
     """
-    a = (seed[0] * delta_xy - pos[0] * delta_xy)**2
+    # Stacks are indexed (z, y, x): axis 0 is z, axes 1 and 2 are y and x
+    a = (seed[0] * delta_z  - pos[0] * delta_z)**2
     b = (seed[1] * delta_xy - pos[1] * delta_xy)**2
-    c = (seed[2] * delta_z  - pos[2] * delta_z)**2
+    c = (seed[2] * delta_xy - pos[2] * delta_xy)**2
 
     return np.sqrt(a+b+c)
 
@@ -271,7 +272,7 @@ def connected_components_3d(prediction, seeds, delta, threshold, distance, dimen
         tuple(labels, N): the labelled stack and the number of found ROIs
     """
     # Initialize everything as background
-    im = np.zeros(prediction.shape, dtype=np.uint16) 
+    im = np.zeros(prediction.shape, dtype=np.int32)  # uint16 overflows (and never terminates) beyond 65535 ROIs 
     L = 1 # Start with label 1
 
     delta_xy = dimensions[0]
