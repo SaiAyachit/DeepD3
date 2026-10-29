@@ -363,8 +363,13 @@ def _plane_background(raw, dend):
     return np.where(np.isnan(bg), np.nanmedian(bg), bg)
 
 
-def spine_table(stack_path, cfg, selection):
-    """One row per spine for one stack under one setting.
+def spine_table(stack_path, cfg, selection, return_labels=False):
+    """One row per spine for one stack under one setting. spine_id = the spine's value in
+    the label image (returned too with return_labels=True).
+
+    Size: volume_um3 (all ROI voxels; inflated in z by axial blur), max_area_um2 (largest
+    cross-section in a single plane; much less affected by z blur) and equiv_diameter_um
+    (diameter of a disc with that area), z_min/z_max (planes spanned).
 
     brightness_shaft_um3 (primary): background-subtracted fluorescence in a fixed
     ellipsoid around the spine's brightest voxel (shaft voxels excluded), divided by
@@ -434,13 +439,19 @@ def spine_table(stack_path, cfg, selection):
                 if n_core >= SHAFT_MIN_VOXELS:
                     shaft_int = float(np.median(core_raw - bg[np.nonzero(core)[0] + w0[0]]))
 
+        plane_px = m.sum(axis=(1, 2))
+        max_area = float(plane_px.max() * DIMENSIONS['xy'] ** 2)
         rows.append({
             "stack": Path(stack_path).stem, "selection": selection, "model": cfg["model"],
             "spine_id": i,
             "z_px": zc, "y_px": yc, "x_px": xc,
             "z_um": zc * DIMENSIONS['z'], "y_um": yc * DIMENSIONS['xy'], "x_um": xc * DIMENSIONS['xy'],
             "volume_um3": float(m.sum() * VOXEL_UM3),
-            "n_planes": int(np.unique(np.nonzero(m)[0]).size),
+            "n_planes": int((plane_px > 0).sum()),
+            "z_min": int(start[0] + np.flatnonzero(plane_px)[0]),
+            "z_max": int(start[0] + np.flatnonzero(plane_px)[-1]),
+            "max_area_um2": max_area,
+            "equiv_diameter_um": float(2 * np.sqrt(max_area / np.pi)),
             "max_spine_prob": float(spine[o][m].max()),
             "head_mean_intensity": head_int / max(len(pts), 1),
             "head_integrated_intensity": head_int,
@@ -450,10 +461,16 @@ def spine_table(stack_path, cfg, selection):
             "_saturated_head": bool((head_raw >= sat_level).any()),
             "_saturated_shaft": shaft_sat,
         })
-    del dend, spine, raw, lab, shaft, dend_cc
+    del dend, spine, raw, shaft, dend_cc
+    if not return_labels:
+        del lab
     gc.collect()
 
-    t = pd.DataFrame(rows)
+    t = _finish_spine_table(pd.DataFrame(rows))
+    return (t, lab) if return_labels else t
+
+
+def _finish_spine_table(t):
     if t.empty:
         return t
     median_shaft = np.nanmedian(t["shaft_intensity"]) if t["shaft_intensity"].notna().any() else np.nan
@@ -717,8 +734,6 @@ def run_benchmark():
         raise RuntimeError("No configuration found any spines — check predictions / thresholds.")
     ranked.insert(0, "rank", range(1, len(ranked) + 1))
     ranked.to_csv(OUT_DIR / "deepd3_sweep_ranked.csv", index=False)
-    best_per_model = ranked.groupby("model", sort=False).head(1)
-    best_per_model.to_csv(OUT_DIR / "deepd3_best_per_model.csv", index=False)
 
     rank_name = "best F1" if ranked["f1"].notna().any() else "most stable"
     # (b): with ground truth the top F1 overall; otherwise the most stable model/peak/delta
@@ -726,6 +741,9 @@ def run_benchmark():
     pool = ranked if rank_name == "best F1" else _same_size_filters(ranked, CHOSEN_CONFIG)
     if pool.empty:
         raise RuntimeError("No ranked setting shares CHOSEN_CONFIG's size filters.")
+    # Same rule as (b), per model; first row = (b)
+    best_per_model = pool.groupby("model", sort=False).head(1)
+    best_per_model.to_csv(OUT_DIR / "deepd3_best_per_model.csv", index=False)
     stable_cfg = {k: (v.item() if hasattr(v, "item") else v)
                   for k, v in pool.iloc[0][["model"] + PARAM_COLS].items()}
     selections = {
