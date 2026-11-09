@@ -14,22 +14,29 @@ without knowing the model.
 Step 1 — sample (run from the repo root):
   python deepd3/inference/spot_check.py --stack m34_960_d1
 Writes to results/spot_check/:
-  spotcheck_<stack>.csv        the sheet you fill in (one row per sample, no model info)
+  spotcheck_<stack>.csv        the sheet you fill in (one row per sample, no model info);
+                               crop_z_first..crop_z_last = the ROI's planes in its TIFF frame
   spotcheck_<stack>.tif        Fiji hyperstack, one frame (t) per sample = sample_id:
-                               ch1 raw, ch2 outline of the sampled ROI (magenta); 96 x 96 px
+                               ch1 raw (green), ch2 outline of the sampled ROI (magenta); 96 x 96 px
                                (~14 µm) around the ROI centre, 11 planes; the ROI centre is
                                in the middle of the crop, middle plane (z = 6)
+  spotcheck_<stack>_rois.zip   ImageJ ROI set for the ORIGINAL stack: per sample '<id> crop'
+                               (yellow box = the TIFF frame's area) and '<id> spine' (magenta
+                               outline), on the sample's centre slice
   spotcheck_<stack>_key.csv    which group/model each sample came from — do not open while scoring
   spotcheck_<stack>_counts.json group sizes, used for the estimates in step 3
 
-Step 2 — score. Open the TIFF in Fiji, move through t (= sample_id) and z, and fill the
+Step 2 — score. Open the TIFF in Fiji (File > Open; sliders c = channel, z = plane in the crop,
+t = sample_id), look through z crop_z_first..crop_z_last of each sample, and fill the
 "verdict" column of spotcheck_<stack>.csv:
   y = a real spine (the outline sits on a spine head/neck protruding from a dendrite)
   n = not a spine (shaft, noise, out-of-focus blob, axon bouton, edge artefact)
   ? = can't tell (excluded from the estimates)
 Optional "note" column, e.g. "split" (ROI covers part of a spine another ROI also covers) or
-"merged" (ROI covers 2+ spines). For more context, x_px / y_px / fiji_slice locate the ROI in
-the original stack (data/processed/<stack>.tif).
+"merged" (ROI covers 2+ spines). For more context, open the original stack
+(data/processed/<stack>.tif) and the ROI set (drag spotcheck_<stack>_rois.zip onto Fiji, or
+ROI Manager > More > Open): clicking '<id> spine' in the ROI Manager jumps to that sample's
+slice and outlines it; Image > Zoom > To Selection zooms in; scroll z to follow it.
 Keep it blind: while scoring, do NOT open the key, qc_<stack>__ref-*.tif or
 compare_*_vs_*_<stack>.tif — their colours show which model found each spine.
 
@@ -56,7 +63,9 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 import tifffile
+from roifile import ImagejRoi, ROI_TYPE, roiwrite
 from scipy import ndimage
+from skimage.measure import find_contours
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import parameter_test as pt
@@ -65,6 +74,7 @@ from compare_models import (MATCH_DILATION_XY_UM, MATCH_DILATION_Z_UM, segment_s
                             split_matched, _lut)
 
 SPOT_DIR = pt.OUT_DIR / "spot_check"
+CROP_COLOR, SPINE_COLOR = b"\xff\xff\xff\x00", b"\xff\xff\x00\xff"   # ImageJ ARGB: yellow, magenta
 VERDICTS = {"y": True, "n": False}   # "?" and blanks are excluded
 
 
@@ -108,11 +118,81 @@ def outline(mask):
     return mask & ~ndimage.binary_erosion(mask, structure=ndimage.generate_binary_structure(2, 1)[None])
 
 
+def make_rois(key, labs, nxy):
+    """ImageJ ROIs on the original stack, two per sample on its centre slice: '<id> crop' = the
+    area of its TIFF frame (yellow), '<id> spine' = the ROI outline (magenta). All samples look
+    the same, so the ROI set does not reveal the group."""
+    rois = []
+    for r in key.itertuples():
+        top, left = r.y - nxy // 2, r.x - nxy // 2
+        rect = ImagejRoi(roitype=ROI_TYPE.RECT, top=top, left=left, bottom=top + nxy, right=left + nxy,
+                         name=f"{r.sample_id:03d} crop")
+        mask = crop(labs[r.model], r.z, r.y, r.x, 1, nxy)[0] == r.spine_id
+        # Trace on a 3x upsampled mask so the outline runs along pixel edges (around the whole
+        # ROI pixels, not through their centres); longest contour, ImageJ pixel coordinates
+        up = np.pad(np.kron(mask, np.ones((3, 3), dtype=bool)), 1).astype(float)
+        contours = find_contours(up, 0.5)
+        if contours:
+            c = (max(contours, key=len) - 1 + 0.5) / 3
+            spine = ImagejRoi.frompoints(np.column_stack([c[:, 1] + left, c[:, 0] + top]),
+                                         name=f"{r.sample_id:03d} spine")
+        else:
+            spine = None
+        for roi, color in [(rect, CROP_COLOR), (spine, SPINE_COLOR)]:
+            if roi is not None:
+                roi.position = int(r.z) + 1   # slice in Fiji (1-based)
+                roi.stroke_color, roi.stroke_width = color, 1
+                rois.append(roi)
+    return rois
+
+
+def read_sheet(fn):
+    """Scoring sheet as saved by any spreadsheet app: comma or semicolon separated, optionally
+    with title lines above the header (Numbers exports the table name first)."""
+    lines = Path(fn).read_text(encoding="utf-8-sig").splitlines()
+    head = next((i for i, l in enumerate(lines) if "sample_id" in l and "verdict" in l), None)
+    if head is None:
+        raise SystemExit(f"{fn}: no header row with 'sample_id' and 'verdict' columns")
+    sep = ";" if lines[head].count(";") > lines[head].count(",") else ","
+    from io import StringIO
+    t = pd.read_csv(StringIO("\n".join(lines[head:])), sep=sep, dtype=str)
+    t.columns = t.columns.str.strip()
+    return t
+
+
+def check_sheet(sheet, key, fn):
+    """The sheet must still describe the sampled spines row for row (guards against sorted or
+    edited rows in the spreadsheet app)."""
+    want = make_sheet(key, 11)[["sample_id", "x_px", "y_px", "fiji_slice"]].astype(int)
+    try:
+        got = sheet[want.columns].astype(int)
+    except (KeyError, ValueError) as e:
+        raise SystemExit(f"{fn}: sample_id / x_px / y_px / fiji_slice columns missing or edited ({e})")
+    got = got.set_index("sample_id").sort_index()
+    want = want.set_index("sample_id").sort_index()
+    if not got.index.equals(want.index) or not got.equals(want):
+        raise SystemExit(f"{fn}: sample_id and coordinates no longer match the key — "
+                         "were rows added, deleted or edited?")
+
+
 def sheet_has_verdicts(fn):
     if not fn.exists():
         return False
-    v = pd.read_csv(fn, dtype=str)["verdict"].fillna("").str.strip()
+    v = read_sheet(fn)["verdict"].fillna("").str.strip()
     return bool((v != "").any())
+
+
+def make_sheet(key, nz):
+    """Scoring sheet. crop_z_first/last = planes of the ROI in the TIFF frame (1..nz, centre at
+    nz // 2 + 1); x_px / y_px / *_slice = position in the original stack."""
+    centre = nz // 2 + 1
+    return pd.DataFrame({
+        "sample_id": key["sample_id"],
+        "crop_z_first": (key["z_min"] - key["z"] + centre).clip(1, nz),
+        "crop_z_last": (key["z_max"] - key["z"] + centre).clip(1, nz),
+        "verdict": "", "note": "",
+        "x_px": key["x"], "y_px": key["y"], "fiji_slice": key["z"] + 1,
+        "first_slice": key["z_min"] + 1, "last_slice": key["z_max"] + 1})
 
 
 def sample_stack(stack_path, cfg_a, cfg_b, args, rng):
@@ -155,6 +235,7 @@ def sample_stack(stack_path, cfg_a, cfg_b, args, rng):
     for i, r in key.iterrows():
         frames[i, :, 0] = crop(raw, r.z, r.y, r.x, nz, nxy)
         frames[i, :, 1] = outline(crop(labs[r.model], r.z, r.y, r.x, nz, nxy) == r.spine_id)
+    rois = make_rois(key, labs, nxy)
     lo, hi = np.percentile(raw[::4], [1, 99.8])
     del raw, lab_a, lab_b, labs
 
@@ -165,11 +246,9 @@ def sample_stack(stack_path, cfg_a, cfg_b, args, rng):
         resolution=(1 / pt.DIMENSIONS['xy'], 1 / pt.DIMENSIONS['xy']),
         metadata={"axes": "TZCYX", "mode": "composite", "unit": "um", "spacing": pt.DIMENSIONS['z'],
                   "Ranges": (float(lo), float(hi), 0.0, 1.0),
-                  "LUTs": [_lut((1, 1, 1)), _lut((1, 0, 1))]},
+                  "LUTs": [_lut((0, 1, 0)), _lut((1, 0, 1))]},
     )
-    sheet = pd.DataFrame({"sample_id": key["sample_id"], "x_px": key["x"], "y_px": key["y"],
-                          "fiji_slice": key["z"] + 1, "first_slice": key["z_min"] + 1,
-                          "last_slice": key["z_max"] + 1, "verdict": "", "note": ""})
+    sheet = make_sheet(key, nz)
     sheet.to_csv(sheet_fn, index=False)
     key.to_csv(SPOT_DIR / f"spotcheck_{stem}_key.csv", index=False)
     counts = {"model_a": a, "model_b": b, "setting_a": cfg_a, "setting_b": cfg_b,
@@ -179,7 +258,10 @@ def sample_stack(stack_path, cfg_a, cfg_b, args, rng):
     (SPOT_DIR / f"spotcheck_{stem}_counts.json").write_text(json.dumps(counts, indent=2))
     print(f"{stem}: {short(a)} {n_a} (only {len(only_a)}) | {short(b)} {n_b} (only {len(only_b)}) | "
           f"sampled {key['group'].value_counts().to_dict()}")
-    print(f"  Saved → {sheet_fn}\n  Saved → {tif_fn} ({len(key)} frames)")
+    roi_fn = SPOT_DIR / f"spotcheck_{stem}_rois.zip"
+    roi_fn.unlink(missing_ok=True)
+    roiwrite(roi_fn, rois, name=[r.name for r in rois])
+    print(f"  Saved → {sheet_fn}\n  Saved → {tif_fn} ({len(key)} frames)\n  Saved → {roi_fn}")
 
 
 # ── scoring ──
@@ -264,8 +346,12 @@ def score(args):
         if not sheet_has_verdicts(sheet_fn):
             print(f"{stem}: no verdicts yet — skipped")
             continue
-        sheet = pd.read_csv(sheet_fn, dtype={"verdict": str, "note": str})
+        sheet = read_sheet(sheet_fn)
         key = pd.read_csv(SPOT_DIR / f"spotcheck_{stem}_key.csv")
+        check_sheet(sheet, key, sheet_fn.name)
+        sheet["sample_id"] = sheet["sample_id"].astype(int)
+        if "note" not in sheet.columns:
+            sheet["note"] = ""
         counts = json.loads((SPOT_DIR / f"spotcheck_{stem}_counts.json").read_text())
         bad = set(sheet["verdict"].dropna().str.strip().str.lower()) - set(VERDICTS) - {"?", ""}
         if bad:
